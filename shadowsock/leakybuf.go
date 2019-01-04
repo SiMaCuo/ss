@@ -1,21 +1,21 @@
-package shadowsocks
+package shadowsock
 
-type leakyBuf struct {
+type LeakyBuf struct {
 	freeList chan []byte
 }
 
-const leakyBufSize int32 = 4096
-const maxNBufs int32 = 1024
+const leakyBufSize int = 4096
+const maxNBufs int = 1024
 
 var leakyBuf = newLeakyBuf()
 
-func newLeakyBuf() *leakyBuf {
-	return &leakyBuf {
-		freeList = make(chan []byte, maxNBufs)
+func newLeakyBuf() *LeakyBuf {
+	return &LeakyBuf{
+		freeList: make(chan []byte, maxNBufs),
 	}
 }
 
-func (lb *leakyBuf) Get() (b []byte) {
+func (lb *LeakyBuf) Get() (b []byte) {
 	select {
 	case b = <-lb.freeList:
 
@@ -26,9 +26,9 @@ func (lb *leakyBuf) Get() (b []byte) {
 	return
 }
 
-func (lb *leakyBuf) Put(b []byte) {
+func (lb *LeakyBuf) Put(b []byte) {
 	if len(b) != leakyBufSize {
-		panic!("invalid leaky buffer size")
+		panic("invalid leaky buffer size")
 	}
 
 	select {
@@ -37,6 +37,3 @@ func (lb *leakyBuf) Put(b []byte) {
 	default:
 	}
 }
-
-
-

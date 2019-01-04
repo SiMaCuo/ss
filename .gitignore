@@ -6,6 +6,7 @@
 *.dylib
 *.swp
 
+/logs/
 # Test binary, build with `go test -c`
 *.test
 

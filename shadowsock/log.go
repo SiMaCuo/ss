@@ -1,4 +1,4 @@
-package shadowsocks
+package shadowsock
 
 import (
 	"github.com/natefinch/lumberjack"
@@ -8,9 +8,14 @@ import (
 var log = newLog()
 
 func newLog() (log *logrus.Logger) {
-	log := logrus.New()
+	log = logrus.New()
 	log.SetLevel(logrus.DebugLevel)
-	log.Formatter = &logrus.JSONFormater{}
+	log.Formatter = &logrus.TextFormatter{
+		ForceColors:      true,
+		FullTimestamp:    true,
+		TimestampFormat:  "2006-01-02 15:04:05",
+		QuoteEmptyFields: true,
+	}
 
 	log.Out = &lumberjack.Logger{
 		Filename:   "./logs/ss-server.log",
@@ -20,4 +25,6 @@ func newLog() (log *logrus.Logger) {
 		Compress:   true,
 		LocalTime:  true,
 	}
+
+	return
 }
