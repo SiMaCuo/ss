@@ -3,6 +3,7 @@ package shadowsock
 import (
 	"github.com/natefinch/lumberjack"
 	logrus "github.com/sirupsen/logrus"
+	easy "github.com/t-tomalak/logrus-easy-formatter"
 )
 
 var log = newLog()
@@ -10,11 +11,9 @@ var log = newLog()
 func newLog() (log *logrus.Logger) {
 	log = logrus.New()
 	log.SetLevel(logrus.DebugLevel)
-	log.Formatter = &logrus.TextFormatter{
-		ForceColors:      true,
-		FullTimestamp:    true,
-		TimestampFormat:  "2006-01-02 15:04:05",
-		QuoteEmptyFields: true,
+	log.Formatter = &easy.Formatter{
+		TimestampFormat: "2006-01-02 15:04:05",
+		LogFormat:       "[%lvl%]: %time% - %msg%\n",
 	}
 
 	log.Out = &lumberjack.Logger{

@@ -1,9 +1,11 @@
 package shadowsock
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -64,7 +66,7 @@ func (s *Server) Run() {
 }
 
 func SetReadDeadLine(c net.Conn) {
-	c.SetReadDeadline(time.Now().Add(10 * time.Second))
+	c.SetReadDeadline(time.Now().Add(30 * time.Second))
 }
 
 func parseRequest(c net.Conn) (host string, err error) {
@@ -89,8 +91,7 @@ func parseRequest(c net.Conn) (host string, err error) {
 		if _, err = io.ReadFull(c, buf[idxDmLen:idxDmLen+1]); err != nil {
 			return
 		}
-		// rdStart, rdEnd = idxDmLen+1, idxDmLen+1+int(buf[idxDmLen])+2
-		rdStart, rdEnd = idxDmLen+1, idxDmLen+1+int(buf[idxDmLen])
+		rdStart, rdEnd = idxDmLen+1, idxDmLen+1+int(buf[idxDmLen])+2
 
 	default:
 		err = fmt.Errorf("address type not supported: %d", atyp)
@@ -102,14 +103,14 @@ func parseRequest(c net.Conn) (host string, err error) {
 
 	switch atyp & atypMask {
 	case atypV4, atypV6:
-		host = net.IP(buf[rdStart:rdEnd]).String()
+		host = net.IP(buf[rdStart : rdEnd-2]).String()
 
 	case atypDm:
-		host = string(buf[rdStart:rdEnd])
+		host = string(buf[rdStart : rdEnd-2])
 	}
 
-	//port := binary.BigEndian.Uint16(buf[rdEnd-2 : rdEnd])
-	//host = net.JoinHostPort(host, strconv.Itoa(int(port)))
+	port := binary.BigEndian.Uint16(buf[rdEnd-2 : rdEnd])
+	host = net.JoinHostPort(host, strconv.Itoa(int(port)))
 
 	return
 }

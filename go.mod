@@ -9,6 +9,7 @@ require (
 	github.com/natefinch/lumberjack v2.0.0+incompatible
 	github.com/sirupsen/logrus v1.2.0
 	github.com/stamblerre/gocode v0.0.0-20181212030458-2f9d39d8f31d // indirect
+	github.com/t-tomalak/logrus-easy-formatter v0.0.0-20180717113515-ca9ce6b071eb
 	golang.org/x/tools v0.0.0-20181221235234-d00ac6d27372 // indirect
 	honnef.co/go/tools v0.0.0-20181108184350-ae8f1f9103cc // indirect
 )
