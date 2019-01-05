@@ -1,0 +1,8 @@
+{
+    "server_port": 23333
+    "password": "23333",
+    "method": "aes-256-gcm",
+	"timeout": 0
+}
+
+        

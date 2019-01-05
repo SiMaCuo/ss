@@ -66,7 +66,7 @@ func (s *Server) Run() {
 }
 
 func SetReadDeadLine(c net.Conn) {
-	c.SetReadDeadline(time.Now().Add(30 * time.Second))
+	c.SetReadDeadline(time.Now().Add(time.Duration(SsConfig.ReadTimeout) * time.Second))
 }
 
 func parseRequest(c net.Conn) (host string, err error) {
