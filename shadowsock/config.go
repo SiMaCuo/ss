@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"io/ioutil"
 	"os"
+
+	"ss-server/crypto"
 )
 
 type Config struct {
+	ServerIp    string `json:"server_ip"`
 	ServerPort  int    `json:"server_port"`
-	Password    string `json:"password"`
+	Psk         string `json:"password"`
 	Method      string `json:"method"`
 	ReadTimeout int    `json:"timeout"`
 }
@@ -34,6 +37,9 @@ func newConfig(path string) (config *Config) {
 		panic("parse config.json failed: " + err.Error())
 		return nil
 	}
+
+	key_size := crypto.CipherKeySize(config.Method)
+	config.Psk = string(crypto.BytesToKey([]byte(config.Psk), key_size))
 
 	return
 }
