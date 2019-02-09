@@ -4,7 +4,6 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/sha1"
-	_ "crypto/sha1"
 	"fmt"
 	"io"
 
@@ -55,6 +54,7 @@ func hkdfSHA1(key, salt, info, outkey []byte) {
 }
 
 type AeadCipher interface {
+	SaltSize() int
 	Encryptor(salt []byte) (cipher.AEAD, error)
 	Decryptor(salt []byte) (cipher.AEAD, error)
 }
@@ -62,6 +62,10 @@ type AeadCipher interface {
 type cipherChoice struct {
 	psk      []byte
 	makeAEAD func(key []byte) (cipher.AEAD, error)
+}
+
+func (c *cipherChoice) SaltSize() int {
+	return len(c.psk)
 }
 
 func (c *cipherChoice) Encryptor(salt []byte) (cipher.AEAD, error) {
@@ -85,25 +89,21 @@ func newAES256(psk []byte) (cipher.AEAD, error) {
 	return cipher.NewGCM(blk)
 }
 
-func NewCipher(method string, psk []byte) (AeadCipher, error) {
-	l := len(psk)
+func NewCipher(method string, password []byte) (AeadCipher, error) {
 	switch method {
 	case CIPHER_AES_256_GCM:
-		if l != 32 {
-			return nil, aes.KeySizeError(l)
-		}
+		psk := make([]byte, 32)
+		hkdfSHA1(password, nil, nil, psk)
 
 		return &cipherChoice{psk: psk, makeAEAD: newAES256}, nil
 	case CIPHER_CHACHA20_IETF_POLY1305:
-		if l != chacha20poly1305.KeySize {
-			return nil, aes.KeySizeError(l)
-		}
+		psk := make([]byte, chacha20poly1305.KeySize)
+		hkdfSHA1(password, nil, nil, psk)
 
 		return &cipherChoice{psk: psk, makeAEAD: chacha20poly1305.New}, nil
 	case CIPHER_XCHACHA20_IETF_POLY1305:
-		if l != chacha20poly1305.KeySize {
-			return nil, aes.KeySizeError(l)
-		}
+		psk := make([]byte, chacha20poly1305.KeySize)
+		hkdfSHA1(password, nil, nil, psk)
 
 		return &cipherChoice{psk: psk, makeAEAD: chacha20poly1305.NewX}, nil
 	}

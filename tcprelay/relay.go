@@ -1,4 +1,4 @@
-package shadowsock
+package tcprelay
 
 import (
 	"encoding/binary"
@@ -8,7 +8,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"ss-server/crypto"
+	"ss-server/shadowsock"
 )
+
+var log = shadowsock.Log
 
 const (
 	idxAtyp     = 0
@@ -28,10 +33,11 @@ const (
 )
 
 type Server struct {
-	l net.Listener
+	l      net.Listener
+	cipher crypto.AeadCipher
 }
 
-func NewServer(network, addr string) *Server {
+func NewServer(network, addr, cipherMethod, password string) *Server {
 	l, err := net.Listen(network, addr)
 	if err != nil {
 		log.Debug("listen on %s failed, %s", addr, err.Error())
@@ -42,8 +48,16 @@ func NewServer(network, addr string) *Server {
 	log.Info("listen on ", addr)
 	fmt.Printf("listen on: %s\n", addr)
 
+	cipher, err := crypto.NewCipher(cipherMethod, []byte(password))
+	if err != nil {
+		log.Info("new cipher failed %s", err.Error())
+		l.Close()
+		return nil
+	}
+
 	return &Server{
-		l: l,
+		l:      l,
+		cipher: cipher,
 	}
 }
 
@@ -61,18 +75,44 @@ func (s *Server) Run() {
 			continue
 		}
 
-		go handleConnection(c)
+		go s.handleConnection(c)
 	}
 }
 
+func (s *Server) handleConnection(c net.Conn) {
+	host, err := parseRequest(c)
+	if err != nil {
+		log.Debug("parse shadowsockets handshake failed: ", err)
+		return
+	}
+
+	if strings.ContainsRune(host, 0x0) {
+		log.Debug("host contains illegal characters")
+		return
+	}
+
+	log.Debug("connecting ", host)
+	peer, err := net.Dial("tcp", host)
+	if err != nil {
+		log.Debug("  connect failed, ", err)
+		return
+	}
+
+	go pipe(peer, c)
+
+	pipe(c, peer)
+}
+
 func SetReadDeadLine(c net.Conn) {
-	c.SetReadDeadline(time.Now().Add(time.Duration(SsConfig.ReadTimeout) * time.Second))
+	c.SetReadDeadline(time.Now().Add(time.Duration(shadowsock.SsConfig.ReadTimeout) * time.Second))
 }
 
 func parseRequest(c net.Conn) (host string, err error) {
 	SetReadDeadLine(c)
 
-	buf := make([]byte, 288)
+	buf := leakyBuf.Get()
+	defer leakyBuf.Put(buf)
+
 	host = "*"
 	if _, err = io.ReadFull(c, buf[:idxAtyp+1]); err != nil {
 		return
@@ -134,28 +174,4 @@ func pipe(src, dst net.Conn) {
 			break
 		}
 	}
-}
-
-func handleConnection(c net.Conn) {
-	host, err := parseRequest(c)
-	if err != nil {
-		log.Debug("parse shadowsockets handshake failed: ", err)
-		return
-	}
-
-	if strings.ContainsRune(host, 0x0) {
-		log.Debug("host contains illegal characters")
-		return
-	}
-
-	log.Debug("connecting ", host)
-	peer, err := net.Dial("tcp", host)
-	if err != nil {
-		log.Debug("  connect failed, ", err)
-		return
-	}
-
-	go pipe(peer, c)
-
-	pipe(c, peer)
 }

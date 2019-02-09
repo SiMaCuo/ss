@@ -6,7 +6,7 @@ import (
 	easy "github.com/t-tomalak/logrus-easy-formatter"
 )
 
-var log = newLog()
+var Log = newLog()
 
 func newLog() (log *logrus.Logger) {
 	log = logrus.New()

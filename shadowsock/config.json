@@ -1,8 +1,9 @@
 {
+    "server_ip": "127.0.0.1"
     "server_port": 23333
-    "password": "23333",
+    "password": "barfoo",
     "method": "aes-256-gcm",
-	"timeout": 0
+	"timeout": 30
 }
 
         

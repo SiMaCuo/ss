@@ -1,11 +1,11 @@
-package shadowsock
+package tcprelay
 
 type LeakyBuf struct {
 	freeList chan []byte
 }
 
 const leakyBufSize int = 320
-const maxNBufs int = 64
+const maxNBufs int = 32
 
 var leakyBuf = newLeakyBuf()
 
