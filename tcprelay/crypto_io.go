@@ -32,16 +32,16 @@ func (b *AeadDecryptor) Read(p []byte) (n int, err error) {
 		return 0, nil
 	}
 
-	n, ltl := 0, 2+b.Overhead()
+	ltl := 2 + b.Overhead()
 	bs, err := b.Peek(ltl)
 	if err != nil {
-		log.Debug("peek length ciphertext failed: %s", err.Error())
+		log.Debug("peek length ciphertext failed: ", err)
 		return 0, err
 	}
 
 	l, err := b.Open(bs[:0], b.nonce, bs, nil)
 	if err != nil {
-		log.Debug("decrypt length failed: %s", err.Error())
+		log.Debug("decrypt length failed: ", err)
 		return 0, err
 	}
 	length := int(binary.BigEndian.Uint16(l))
@@ -50,14 +50,14 @@ func (b *AeadDecryptor) Read(p []byte) (n int, err error) {
 
 	bs, err = b.Peek(length + b.Overhead())
 	if err != nil {
-		log.Debug("peek size %d bytes ciphertext failed: %s", length+b.Overhead(), err.Error())
+		log.Debugf("peek size %d bytes ciphertext failed: %s", length+b.Overhead(), err.Error())
 		return 0, err
 	}
 
 	defer b.Discard(length + b.Overhead())
 	plaintext, err := b.Open(bs[:0], b.nonce, bs, nil)
 	if err != nil {
-		log.Debug("decrypt payload failed: %s", err.Error())
+		log.Debugf("decrypt payload failed: %s", err.Error())
 		return 0, err
 	}
 	increment(b.nonce)
@@ -138,27 +138,20 @@ func NewAeadEncryptor(w io.Writer, aead cipher.AEAD) *AeadEncryptor {
 }
 
 func (b *AeadEncryptor) ReadFrom(r io.Reader) (n int64, err error) {
-	n = 0
 	rd := bufio.NewReaderSize(r, 2048)
-	chunk_len := SS_TCP_CHUNK_LEN - 2*b.Overhead() + 2
+	chunk_len := SS_TCP_CHUNK_LEN - 2*b.Overhead() - 2
 	for {
-		p, err := rd.Peek(chunk_len)
-		if len(p) > 0 {
-			payloadLen := len(p)
+		plaintext, err := rd.Peek(chunk_len)
+		payloadLen := len(plaintext)
+		if payloadLen > 0 {
 			binary.BigEndian.PutUint16(b.buf[:2], uint16(payloadLen))
-			out := b.Seal(b.buf[:0], b.nonce, b.buf[:2], nil)
-			if len(out) > 2+b.Overhead() {
-				panic("too many bytes write to len buffer")
-			}
+			b.Seal(b.buf[:0], b.nonce, b.buf[:2], nil)
 			increment(b.nonce)
 
-			out = b.Seal(b.buf[2+b.Overhead():], b.nonce, p, nil)
-			if len(out) > payloadLen+b.Overhead() {
-				panic("too many bytes write to playload buffer")
-			}
+			b.Seal(b.buf[2+b.Overhead():], b.nonce, plaintext, nil)
 			increment(b.nonce)
-
 			rd.Discard(payloadLen)
+
 			nw, wd_err := b.Write(b.buf[:2+2*b.Overhead()+payloadLen])
 			n += int64(nw)
 			if wd_err != nil && err == nil {

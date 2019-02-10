@@ -31,19 +31,8 @@ func (e CipherMethodError) Error() string {
 // copy from shadowsock-go
 func BytesToKey(bytes []byte, key_len uint32) (key []byte) {
 	key = make([]byte, key_len)
-	hkdfSHA1(bytes, []byte(""), []byte(""), key)
+	hkdfSHA1(bytes, nil, nil, key)
 	return
-}
-
-func CipherKeySize(method string) uint32 {
-	switch method {
-	case CIPHER_AES_256_GCM:
-		return 32
-	case CIPHER_CHACHA20_IETF_POLY1305, CIPHER_XCHACHA20_IETF_POLY1305:
-		return chacha20poly1305.KeySize
-	default:
-		panic("unknow cipher method")
-	}
 }
 
 func hkdfSHA1(key, salt, info, outkey []byte) {
@@ -92,18 +81,15 @@ func newAES256(psk []byte) (cipher.AEAD, error) {
 func NewCipher(method string, password []byte) (AeadCipher, error) {
 	switch method {
 	case CIPHER_AES_256_GCM:
-		psk := make([]byte, 32)
-		hkdfSHA1(password, nil, nil, psk)
+		psk := BytesToKey(password, 32)
 
 		return &cipherChoice{psk: psk, makeAEAD: newAES256}, nil
 	case CIPHER_CHACHA20_IETF_POLY1305:
-		psk := make([]byte, chacha20poly1305.KeySize)
-		hkdfSHA1(password, nil, nil, psk)
+		psk := BytesToKey(password, chacha20poly1305.KeySize)
 
 		return &cipherChoice{psk: psk, makeAEAD: chacha20poly1305.New}, nil
 	case CIPHER_XCHACHA20_IETF_POLY1305:
-		psk := make([]byte, chacha20poly1305.KeySize)
-		hkdfSHA1(password, nil, nil, psk)
+		psk := BytesToKey(password, chacha20poly1305.KeySize)
 
 		return &cipherChoice{psk: psk, makeAEAD: chacha20poly1305.NewX}, nil
 	}

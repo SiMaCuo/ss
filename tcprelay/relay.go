@@ -17,12 +17,12 @@ import (
 var log = shadowsock.Log
 
 const (
-	idxAtyp     = 0
-	idxIpv4     = 1
+	idxAtyp     = 3
+	idxIpv4     = idxAtyp + 1
 	idxIpv4Port = net.IPv4len + idxIpv4
-	idxIpv6     = 1
+	idxIpv6     = idxAtyp + 1
 	idxIpv6Port = net.IPv6len + idxIpv6
-	idxDmLen    = 1
+	idxDmLen    = idxAtyp + 1
 
 	lenIpv4 = net.IPv4len + 2
 	lenIpv6 = net.IPv6len + 2
@@ -41,7 +41,7 @@ type Server struct {
 func NewServer(network, addr, cipherMethod, password string) *Server {
 	l, err := net.Listen(network, addr)
 	if err != nil {
-		log.Debug("listen on %s failed, %s", addr, err.Error())
+		log.Debugf("listen on %s failed, %s", addr, err)
 
 		return nil
 	}
@@ -94,6 +94,9 @@ func (s *Server) handShake(c net.Conn) (net.Conn, *AeadDecryptor, error) {
 		msg := fmt.Errorf("want %d byte salt, byte recv %d byte", saltSize, n)
 		return nil, nil, msg
 	}
+	
+	buf := leakyBuf.Get()
+	defer leakyBuf.Put(buf)
 
 	aead, err := s.cipher.Decryptor(salt)
 	if err != nil {
@@ -101,11 +104,8 @@ func (s *Server) handShake(c net.Conn) (net.Conn, *AeadDecryptor, error) {
 		return nil, nil, msg
 	}
 
-	buf := leakyBuf.Get()
-	defer leakyBuf.Put(buf)
-
 	decr := NewAeadDecryptor(c, aead)
-	n, err = c.Read(buf)
+	n, err = decr.Read(buf)
 	if err != nil {
 		msg := fmt.Errorf("decrypt handshake message failed")
 		return nil, nil, msg
@@ -154,12 +154,13 @@ func (s *Server) handleConnection(client net.Conn) {
 	defer client.Close()
 	salt, err := s.genSaltAndSend(client)
 	if err != nil {
-		log.Debug("gen salt failed: %s", err.Error())
+		log.Debug("gen salt failed: ", err)
 		return
 	}
 
 	web, src, err := s.handShake(client)
 	if err != nil {
+		log.Debug("handshake failed: ", err)
 		return
 	}
 
@@ -189,8 +190,18 @@ func SetReadDeadLine(c net.Conn) {
 }
 
 func parseRequest(buf []byte) (host string, err error) {
+	ver, cmd, _, atyp := buf[0], buf[1], buf[2], buf[3]
+	if ver != 0x5 {
+		err = fmt.Errorf("only support version 5, but %d", ver)
+		return
+	}
+
+	if cmd != 0x1 {
+		err = fmt.Errorf("only support connect command, buf %d", cmd)
+		return
+	}
+
 	var rdStart, rdEnd int
-	atyp := buf[idxAtyp]
 	switch atyp & atypMask {
 	case atypV4:
 		rdStart, rdEnd = idxIpv4, idxIpv4+lenIpv4
@@ -202,7 +213,11 @@ func parseRequest(buf []byte) (host string, err error) {
 		rdStart, rdEnd = idxDmLen+1, idxDmLen+1+int(buf[idxDmLen])+2
 
 	default:
-		err = fmt.Errorf("address type not supported: %d", atyp)
+		err = fmt.Errorf("address type not supported: %d, %v", atyp, buf)
+	}
+
+	if err != nil {
+		return
 	}
 
 	switch atyp & atypMask {
