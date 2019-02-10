@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/cipher"
 	"encoding/binary"
+	"fmt"
 	"io"
 )
 
@@ -24,6 +25,50 @@ type AeadDecryptor struct {
 	*bufio.Reader
 	cipher.AEAD
 	nonce []byte
+}
+
+func (b *AeadDecryptor) Read(p []byte) (n int, err error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+
+	n, ltl := 0, 2+b.Overhead()
+	bs, err := b.Peek(ltl)
+	if err != nil {
+		log.Debug("peek length ciphertext failed: %s", err.Error())
+		return 0, err
+	}
+
+	l, err := b.Open(bs[:0], b.nonce, bs, nil)
+	if err != nil {
+		log.Debug("decrypt length failed: %s", err.Error())
+		return 0, err
+	}
+	length := int(binary.BigEndian.Uint16(l))
+	increment(b.nonce)
+	b.Discard(ltl)
+
+	bs, err = b.Peek(length + b.Overhead())
+	if err != nil {
+		log.Debug("peek size %d bytes ciphertext failed: %s", length+b.Overhead(), err.Error())
+		return 0, err
+	}
+
+	defer b.Discard(length + b.Overhead())
+	plaintext, err := b.Open(bs[:0], b.nonce, bs, nil)
+	if err != nil {
+		log.Debug("decrypt payload failed: %s", err.Error())
+		return 0, err
+	}
+	increment(b.nonce)
+
+	if len(plaintext) > len(p) {
+		log.Debug("need more space")
+
+		return 0, fmt.Errorf("need more space")
+	}
+
+	return copy(p, plaintext), nil
 }
 
 func (b *AeadDecryptor) WriteTo(w io.Writer) (n int64, err error) {

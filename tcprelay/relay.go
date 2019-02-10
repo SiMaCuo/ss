@@ -1,6 +1,7 @@
 package tcprelay
 
 import (
+	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -79,45 +80,115 @@ func (s *Server) Run() {
 	}
 }
 
-func (s *Server) handleConnection(c net.Conn) {
-	host, err := parseRequest(c)
+var zeroNonce = make([]byte, 64)
+
+func (s *Server) handShake(c net.Conn) (net.Conn, *AeadDecryptor, error) {
+	salt, saltSize := make([]byte, s.cipher.SaltSize()), s.cipher.SaltSize()
+	n, err := c.Read(salt)
 	if err != nil {
-		log.Debug("parse shadowsockets handshake failed: ", err)
-		return
+		msg := fmt.Errorf("recv salt faile %s", err.Error())
+		return nil, nil, msg
 	}
 
+	if n != saltSize {
+		msg := fmt.Errorf("want %d byte salt, byte recv %d byte", saltSize, n)
+		return nil, nil, msg
+	}
+
+	aead, err := s.cipher.Decryptor(salt)
+	if err != nil {
+		msg := fmt.Errorf("create decryptor failed %s", err.Error())
+		return nil, nil, msg
+	}
+
+	buf := leakyBuf.Get()
+	defer leakyBuf.Put(buf)
+
+	decr := NewAeadDecryptor(c, aead)
+	n, err = c.Read(buf)
+	if err != nil {
+		msg := fmt.Errorf("decrypt handshake message failed")
+		return nil, nil, msg
+	}
+
+	host, err := parseRequest(buf[:n])
+	if err != nil {
+		return nil, nil, err
+	}
+
+	log.Debug("host: ", host)
 	if strings.ContainsRune(host, 0x0) {
-		log.Debug("host contains illegal characters")
-		return
+		msg := fmt.Errorf("host contains illegal characters")
+		return nil, nil, msg
 	}
 
-	log.Debug("connecting ", host)
-	peer, err := net.Dial("tcp", host)
+	conn, err := net.Dial("tcp", host)
 	if err != nil {
-		log.Debug("  connect failed, ", err)
+		msg := fmt.Errorf("connect to host %s failed %s", host, err.Error())
+		return nil, nil, msg
+	}
+
+	return conn, decr, nil
+}
+
+func (s *Server) genSaltAndSend(c net.Conn) ([]byte, error) {
+	salt := make([]byte, s.cipher.SaltSize())
+	io.ReadFull(rand.Reader, salt)
+	n, err := c.Write(salt)
+	if err != nil {
+		return nil, err
+	}
+	if n != len(salt) {
+		return nil, fmt.Errorf("salt %d byte, but send %d byte", len(salt), n)
+	}
+
+	return salt, nil
+}
+
+func (s *Server) handleConnection(client net.Conn) {
+	type res struct {
+		amt int64
+		err error
+	}
+
+	defer client.Close()
+	salt, err := s.genSaltAndSend(client)
+	if err != nil {
+		log.Debug("gen salt failed: %s", err.Error())
 		return
 	}
 
-	go pipe(peer, c)
+	web, src, err := s.handShake(client)
+	if err != nil {
+		return
+	}
 
-	pipe(c, peer)
+	defer web.Close()
+	ch := make(chan res)
+	go func() {
+		amt, err := io.Copy(web, src)
+		client.SetReadDeadline(time.Now())
+		web.SetReadDeadline(time.Now())
+		ch <- res{amt, err}
+	}()
+
+	aead, _ := s.cipher.Encryptor(salt)
+	dst := NewAeadEncryptor(client, aead)
+	amt, err := io.Copy(dst, web)
+	client.SetReadDeadline(time.Now())
+	web.SetReadDeadline(time.Now())
+	rs := <-ch
+
+	Stat(rs.amt, amt)
 }
+
+func Stat(c2w, w2c int64) {}
 
 func SetReadDeadLine(c net.Conn) {
 	c.SetReadDeadline(time.Now().Add(time.Duration(shadowsock.SsConfig.ReadTimeout) * time.Second))
 }
 
-func parseRequest(c net.Conn) (host string, err error) {
-	SetReadDeadLine(c)
-
-	buf := leakyBuf.Get()
-	defer leakyBuf.Put(buf)
-
-	host = "*"
-	if _, err = io.ReadFull(c, buf[:idxAtyp+1]); err != nil {
-		return
-	}
-
+func parseRequest(buf []byte) (host string, err error) {
 	var rdStart, rdEnd int
 	atyp := buf[idxAtyp]
 	switch atyp & atypMask {
@@ -128,17 +199,10 @@ func parseRequest(c net.Conn) (host string, err error) {
 		rdStart, rdEnd = idxIpv6, idxIpv6+lenIpv6
 
 	case atypDm:
-		if _, err = io.ReadFull(c, buf[idxDmLen:idxDmLen+1]); err != nil {
-			return
-		}
 		rdStart, rdEnd = idxDmLen+1, idxDmLen+1+int(buf[idxDmLen])+2
 
 	default:
 		err = fmt.Errorf("address type not supported: %d", atyp)
-	}
-
-	if _, err = io.ReadFull(c, buf[rdStart:rdEnd]); err != nil {
-		return
 	}
 
 	switch atyp & atypMask {
