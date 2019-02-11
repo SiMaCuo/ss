@@ -73,6 +73,7 @@ func (b *AeadDecryptor) Read(p []byte) (n int, err error) {
 
 func (b *AeadDecryptor) WriteTo(w io.Writer) (n int64, err error) {
 	n, ltl := 0, 2+b.Overhead()
+	log.Debug("i'm in WriteTo routine")
 	for {
 		p, err := b.Peek(ltl)
 		if err != nil {
@@ -102,6 +103,7 @@ func (b *AeadDecryptor) WriteTo(w io.Writer) (n int64, err error) {
 		}
 		increment(b.nonce)
 		nw, err := w.Write(p[:length])
+		log.Debugf("write to web %d byte", nw)
 		n += int64(nw)
 		b.Discard(length + b.Overhead())
 		if err != nil {
@@ -138,6 +140,7 @@ func NewAeadEncryptor(w io.Writer, aead cipher.AEAD) *AeadEncryptor {
 }
 
 func (b *AeadEncryptor) ReadFrom(r io.Reader) (n int64, err error) {
+	log.Debug("i'm in ReadFrom routine")
 	rd := bufio.NewReaderSize(r, 2048)
 	chunk_len := SS_TCP_CHUNK_LEN - 2*b.Overhead() - 2
 	for {
@@ -146,13 +149,16 @@ func (b *AeadEncryptor) ReadFrom(r io.Reader) (n int64, err error) {
 		if payloadLen > 0 {
 			binary.BigEndian.PutUint16(b.buf[:2], uint16(payloadLen))
 			b.Seal(b.buf[:0], b.nonce, b.buf[:2], nil)
+			log.Debugf("seal %d byte, nonce %v, lenth %v", payloadLen, b.nonce, b.buf[:2+b.Overhead()])
 			increment(b.nonce)
 
-			b.Seal(b.buf[2+b.Overhead():], b.nonce, plaintext, nil)
+			b.Seal(b.buf[:2+b.Overhead()], b.nonce, plaintext, nil)
+			log.Debugf("seal payload, nonce %v", b.nonce)
 			increment(b.nonce)
 			rd.Discard(payloadLen)
 
 			nw, wd_err := b.Write(b.buf[:2+2*b.Overhead()+payloadLen])
+			log.Debugf("read from web %d, total weite %d", payloadLen, nw)
 			n += int64(nw)
 			if wd_err != nil && err == nil {
 				err = wd_err

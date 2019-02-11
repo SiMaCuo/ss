@@ -94,7 +94,7 @@ func (s *Server) handShake(c net.Conn) (net.Conn, *AeadDecryptor, error) {
 		msg := fmt.Errorf("want %d byte salt, byte recv %d byte", saltSize, n)
 		return nil, nil, msg
 	}
-	
+
 	buf := leakyBuf.Get()
 	defer leakyBuf.Put(buf)
 
@@ -167,17 +167,15 @@ func (s *Server) handleConnection(client net.Conn) {
 	defer web.Close()
 	ch := make(chan res)
 	go func() {
+		log.Debug("c2w start")
 		amt, err := io.Copy(web, src)
-		client.SetReadDeadline(time.Now())
-		web.SetReadDeadline(time.Now())
 		ch <- res{amt, err}
 	}()
 
 	aead, _ := s.cipher.Encryptor(salt)
 	dst := NewAeadEncryptor(client, aead)
+	log.Debug("w2c start")
 	amt, err := io.Copy(dst, web)
-	client.SetReadDeadline(time.Now())
-	web.SetReadDeadline(time.Now())
 	rs := <-ch
 
 	Stat(rs.amt, amt)
