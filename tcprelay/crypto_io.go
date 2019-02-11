@@ -71,46 +71,47 @@ func (b *AeadDecryptor) Read(p []byte) (n int, err error) {
 	return copy(p, plaintext), nil
 }
 
-func (b *AeadDecryptor) WriteTo(w io.Writer) (n int64, err error) {
-	n, ltl := 0, 2+b.Overhead()
+func (b *AeadDecryptor) WriteTo(w io.Writer) (amt int64, err error) {
+	lenSecSize := 2 + b.Overhead()
 	for {
-		p, err := b.Peek(ltl)
+		p, err := b.Peek(lenSecSize)
 		if err != nil {
-			break
+			return amt, err
 		}
 
 		_, err = b.Open(p[:0], b.nonce, p, nil)
 		if err != nil {
 			log.Debug("decrypt length error: %s", err.Error())
-			break
+			return amt, err
 		}
 
-		length := int(binary.BigEndian.Uint16(p[0:]))
+		payloadSize := int(binary.BigEndian.Uint16(p[0:]))
 		increment(b.nonce)
-		// do not discard early
-		b.Discard(ltl)
+		b.Discard(lenSecSize)
 
-		p, err = b.Peek(length + b.Overhead())
+		p, err = b.Peek(payloadSize + b.Overhead())
 		if err != nil {
-			break
+			return amt, err
 		}
 
 		_, err = b.Open(p[:0], b.nonce, p, nil)
 		if err != nil {
 			log.Debug("decript payload err: %s", err.Error())
-			break
+			return amt, err
 		}
 		increment(b.nonce)
-		nw, err := w.Write(p[:length])
-		log.Debugf("write to web %d byte", nw)
-		n += int64(nw)
-		b.Discard(length + b.Overhead())
-		if err != nil {
-			break
+
+		for pos := 0; pos < payloadSize; {
+			nw, err := w.Write(p[:payloadSize])
+			if err != nil {
+				return amt, err
+			}
+			pos += nw
+			amt += int64(nw)
 		}
+		b.Discard(payloadSize + b.Overhead())
 	}
 
-	return n, err
 }
 
 func NewAeadDecryptor(rd io.Reader, aead cipher.AEAD) *AeadDecryptor {
@@ -145,9 +146,9 @@ func NewAeadEncryptor(w io.Writer, aead cipher.AEAD) *AeadEncryptor {
 
 func (b *AeadEncryptor) ReadFrom(r io.Reader) (amt int64, err error) {
 	reader := bufio.NewReader(r)
-	chunkLen := SS_TCP_CHUNK_LEN - 2*b.Overhead() - 2
+	chunkSize := SS_TCP_CHUNK_LEN - 2*b.Overhead() - 2
 	for {
-		n, err := reader.Read(b.payloadSec[:chunkLen])
+		n, err := reader.Read(b.payloadSec[:chunkSize])
 		if err != nil {
 			return amt, err
 		}

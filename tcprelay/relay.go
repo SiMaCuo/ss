@@ -116,7 +116,6 @@ func (s *Server) handShake(c net.Conn) (net.Conn, *AeadDecryptor, error) {
 		return nil, nil, err
 	}
 
-	log.Debug("host: ", host)
 	if strings.ContainsRune(host, 0x0) {
 		msg := fmt.Errorf("host contains illegal characters")
 		return nil, nil, msg
@@ -151,30 +150,34 @@ func (s *Server) handleConnection(client net.Conn) {
 		err error
 	}
 
-	defer client.Close()
 	salt, err := s.genSaltAndSend(client)
 	if err != nil {
 		log.Debug("gen salt failed: ", err)
+		client.Close()
 		return
 	}
 
 	web, src, err := s.handShake(client)
 	if err != nil {
 		log.Debug("handshake failed: ", err)
+		client.Close()
 		return
 	}
 
-	defer web.Close()
 	ch := make(chan res)
 	go func() {
 		amt, err := io.Copy(web, src)
+		client.Close()
 		ch <- res{amt, err}
+		log.Debug("------WriteTo Done")
 	}()
 
 	aead, _ := s.cipher.Encryptor(salt)
 	dst := NewAeadEncryptor(client, aead)
 	amt, err := io.Copy(dst, web)
+	web.Close()
 	rs := <-ch
+	log.Debug("------ReadFrom Done")
 
 	Stat(rs.amt, amt)
 }
