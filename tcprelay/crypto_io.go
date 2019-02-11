@@ -73,7 +73,6 @@ func (b *AeadDecryptor) Read(p []byte) (n int, err error) {
 
 func (b *AeadDecryptor) WriteTo(w io.Writer) (n int64, err error) {
 	n, ltl := 0, 2+b.Overhead()
-	log.Debug("i'm in WriteTo routine")
 	for {
 		p, err := b.Peek(ltl)
 		if err != nil {
@@ -126,49 +125,54 @@ func NewAeadDecryptor(rd io.Reader, aead cipher.AEAD) *AeadDecryptor {
 type AeadEncryptor struct {
 	io.Writer
 	cipher.AEAD
-	nonce []byte
-	buf   []byte
+	nonce      []byte
+	sealBuf    []byte
+	lenSec     []byte
+	payloadSec []byte
 }
 
 func NewAeadEncryptor(w io.Writer, aead cipher.AEAD) *AeadEncryptor {
+	sealBuf := make([]byte, SS_TCP_CHUNK_LEN)
 	return &AeadEncryptor{
-		Writer: w,
-		AEAD:   aead,
-		nonce:  make([]byte, aead.NonceSize()),
-		buf:    make([]byte, SS_TCP_CHUNK_LEN),
+		Writer:     w,
+		AEAD:       aead,
+		nonce:      make([]byte, aead.NonceSize()),
+		sealBuf:    sealBuf,
+		lenSec:     sealBuf[:2+aead.Overhead()],
+		payloadSec: sealBuf[2+aead.Overhead():],
 	}
 }
 
-func (b *AeadEncryptor) ReadFrom(r io.Reader) (n int64, err error) {
-	log.Debug("i'm in ReadFrom routine")
-	rd := bufio.NewReaderSize(r, 2048)
-	chunk_len := SS_TCP_CHUNK_LEN - 2*b.Overhead() - 2
+func (b *AeadEncryptor) ReadFrom(r io.Reader) (amt int64, err error) {
+	reader := bufio.NewReader(r)
+	chunkLen := SS_TCP_CHUNK_LEN - 2*b.Overhead() - 2
 	for {
-		plaintext, err := rd.Peek(chunk_len)
-		payloadLen := len(plaintext)
-		if payloadLen > 0 {
-			binary.BigEndian.PutUint16(b.buf[:2], uint16(payloadLen))
-			b.Seal(b.buf[:0], b.nonce, b.buf[:2], nil)
-			log.Debugf("seal %d byte, nonce %v, lenth %v", payloadLen, b.nonce, b.buf[:2+b.Overhead()])
-			increment(b.nonce)
-
-			b.Seal(b.buf[:2+b.Overhead()], b.nonce, plaintext, nil)
-			log.Debugf("seal payload, nonce %v", b.nonce)
-			increment(b.nonce)
-			rd.Discard(payloadLen)
-
-			nw, wd_err := b.Write(b.buf[:2+2*b.Overhead()+payloadLen])
-			log.Debugf("read from web %d, total weite %d", payloadLen, nw)
-			n += int64(nw)
-			if wd_err != nil && err == nil {
-				err = wd_err
-			}
+		n, err := reader.Read(b.payloadSec[:chunkLen])
+		if err != nil {
+			return amt, err
 		}
 
-		if err != nil {
-			break
+		if n == 0 {
+			continue
+		}
+
+		binary.BigEndian.PutUint16(b.lenSec[:2], uint16(n))
+		b.Seal(b.lenSec[:0], b.nonce, b.lenSec[:2], nil)
+		increment(b.nonce)
+
+		b.Seal(b.payloadSec[:0], b.nonce, b.payloadSec[:n], nil)
+		increment(b.nonce)
+
+		pos, secSize := 0, 2+2*b.Overhead()+n
+		for pos < secSize {
+			nw, err := b.Write(b.sealBuf[pos:secSize])
+			if err != nil {
+				return amt, err
+			}
+			pos += nw
+			amt += int64(nw)
 		}
 	}
 
-	return n, err
+	return
 }

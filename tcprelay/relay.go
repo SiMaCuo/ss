@@ -46,7 +46,7 @@ func NewServer(network, addr, cipherMethod, password string) *Server {
 		return nil
 	}
 
-	log.Info("listen on ", addr)
+	log.Info("\nlisten on ", addr)
 	fmt.Printf("listen on: %s\n", addr)
 
 	cipher, err := crypto.NewCipher(cipherMethod, []byte(password))
@@ -167,14 +167,12 @@ func (s *Server) handleConnection(client net.Conn) {
 	defer web.Close()
 	ch := make(chan res)
 	go func() {
-		log.Debug("c2w start")
 		amt, err := io.Copy(web, src)
 		ch <- res{amt, err}
 	}()
 
 	aead, _ := s.cipher.Encryptor(salt)
 	dst := NewAeadEncryptor(client, aead)
-	log.Debug("w2c start")
 	amt, err := io.Copy(dst, web)
 	rs := <-ch
 
