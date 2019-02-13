@@ -46,7 +46,8 @@ func NewServer(network, addr, cipherMethod, password string) *Server {
 		return nil
 	}
 
-	log.Info("\nlisten on ", addr)
+	log.Info("``````````````````````````````````````````````````````````")
+	log.Info("listen on ", addr)
 	fmt.Printf("listen on: %s\n", addr)
 
 	cipher, err := crypto.NewCipher(cipherMethod, []byte(password))
@@ -82,17 +83,22 @@ func (s *Server) Run() {
 
 var zeroNonce = make([]byte, 64)
 
-func (s *Server) handShake(c net.Conn) (net.Conn, *AeadDecryptor, error) {
+type res struct {
+	amt int64
+	err error
+}
+
+func (s *Server) handShake(c net.Conn, resChan chan<- res) (net.Conn, *AeadDecryptor, string, error) {
 	salt, saltSize := make([]byte, s.cipher.SaltSize()), s.cipher.SaltSize()
 	n, err := c.Read(salt)
 	if err != nil {
 		msg := fmt.Errorf("recv salt faile %s", err.Error())
-		return nil, nil, msg
+		return nil, nil, "", msg
 	}
 
 	if n != saltSize {
 		msg := fmt.Errorf("want %d byte salt, byte recv %d byte", saltSize, n)
-		return nil, nil, msg
+		return nil, nil, "", msg
 	}
 
 	buf := leakyBuf.Get()
@@ -101,33 +107,35 @@ func (s *Server) handShake(c net.Conn) (net.Conn, *AeadDecryptor, error) {
 	aead, err := s.cipher.Decryptor(salt)
 	if err != nil {
 		msg := fmt.Errorf("create decryptor failed %s", err.Error())
-		return nil, nil, msg
+		return nil, nil, "", msg
 	}
 
-	decr := NewAeadDecryptor(c, aead)
+	decr := NewAeadDecryptor(c, aead, resChan)
 	n, err = decr.Read(buf)
 	if err != nil {
 		msg := fmt.Errorf("decrypt handshake message failed")
-		return nil, nil, msg
+		return nil, nil, "", msg
 	}
 
 	host, err := parseRequest(buf[:n])
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 
 	if strings.ContainsRune(host, 0x0) {
 		msg := fmt.Errorf("host contains illegal characters")
-		return nil, nil, msg
+		return nil, nil, "", msg
 	}
 
+	decr.setName(fmt.Sprintf("%s <- %s", host, c.RemoteAddr().String()))
+	log.Debug(fmt.Sprintf("%s <- %s connect", host, c.RemoteAddr().String()))
 	conn, err := net.Dial("tcp", host)
 	if err != nil {
 		msg := fmt.Errorf("connect to host %s failed %s", host, err.Error())
-		return nil, nil, msg
+		return nil, nil, "", msg
 	}
 
-	return conn, decr, nil
+	return conn, decr, host, nil
 }
 
 func (s *Server) genSaltAndSend(c net.Conn) ([]byte, error) {
@@ -145,11 +153,6 @@ func (s *Server) genSaltAndSend(c net.Conn) ([]byte, error) {
 }
 
 func (s *Server) handleConnection(client net.Conn) {
-	type res struct {
-		amt int64
-		err error
-	}
-
 	salt, err := s.genSaltAndSend(client)
 	if err != nil {
 		log.Debug("gen salt failed: ", err)
@@ -157,29 +160,43 @@ func (s *Server) handleConnection(client net.Conn) {
 		return
 	}
 
-	web, src, err := s.handShake(client)
+	c2wRes := make(chan res, 1)
+	web, src, host, err := s.handShake(client, c2wRes)
 	if err != nil {
 		log.Debug("handshake failed: ", err)
 		client.Close()
 		return
 	}
 
-	ch := make(chan res)
+	thisName := fmt.Sprintf("%s <-> %s", host, client.RemoteAddr().String())
 	go func() {
-		amt, err := io.Copy(web, src)
+		io.Copy(web, src)
 		client.Close()
-		ch <- res{amt, err}
-		log.Debug("------WriteTo Done")
 	}()
 
+	w2cRes := make(chan res, 1)
 	aead, _ := s.cipher.Encryptor(salt)
-	dst := NewAeadEncryptor(client, aead)
-	amt, err := io.Copy(dst, web)
-	web.Close()
-	rs := <-ch
-	log.Debug("------ReadFrom Done")
+	dst := NewAeadEncryptor(client, aead, w2cRes)
+	dst.setName(fmt.Sprintf("%s -> %s", host, client.RemoteAddr().String()))
+	go func() {
+		io.Copy(dst, web)
+		web.Close()
+	}()
 
-	Stat(rs.amt, amt)
+	var finalWait chan res
+	select {
+	// client read closed
+	case <-c2wRes:
+		web.(*net.TCPConn).CloseRead()
+		finalWait = w2cRes
+	// web read closed
+	case <-w2cRes:
+		client.(*net.TCPConn).CloseRead()
+		finalWait = c2wRes
+	}
+
+	<-finalWait
+	log.Debugf("%s total done", thisName)
 }
 
 func Stat(c2w, w2c int64) {}
@@ -231,25 +248,4 @@ func parseRequest(buf []byte) (host string, err error) {
 	host = net.JoinHostPort(host, strconv.Itoa(int(port)))
 
 	return
-}
-
-func pipe(src, dst net.Conn) {
-	defer dst.Close()
-
-	buf := make([]byte, 4096)
-	for {
-		SetReadDeadLine(src)
-		n, err := src.Read(buf)
-		if n > 0 {
-			if _, err = dst.Write(buf[:n]); err != nil {
-				log.Debug("write failed: ", err.Error())
-				break
-			}
-		}
-
-		if err != nil {
-			log.Debug("read failed: ", err.Error())
-			break
-		}
-	}
 }

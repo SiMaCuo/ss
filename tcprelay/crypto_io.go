@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"net"
 )
 
 const SS_TCP_CHUNK_LEN = 1452
@@ -23,8 +24,11 @@ func increment(b []byte) {
 // WriteTo
 type AeadDecryptor struct {
 	*bufio.Reader
+	reader io.Reader
 	cipher.AEAD
 	nonce []byte
+	name  string
+	c     chan<- res
 }
 
 func (b *AeadDecryptor) Read(p []byte) (n int, err error) {
@@ -73,38 +77,48 @@ func (b *AeadDecryptor) Read(p []byte) (n int, err error) {
 
 func (b *AeadDecryptor) WriteTo(w io.Writer) (amt int64, err error) {
 	lenSecSize := 2 + b.Overhead()
+	conn, typOk := b.reader.(net.Conn)
 	for {
+		if typOk {
+			SetReadDeadLine(conn)
+		}
+
 		p, err := b.Peek(lenSecSize)
 		if err != nil {
-			return amt, err
+			log.Debugf("%s read error: %s", b.name, err.Error())
+			break
 		}
 
 		_, err = b.Open(p[:0], b.nonce, p, nil)
 		if err != nil {
 			log.Debug("decrypt length error: %s", err.Error())
-			return amt, err
+			break
 		}
 
 		payloadSize := int(binary.BigEndian.Uint16(p[0:]))
 		increment(b.nonce)
 		b.Discard(lenSecSize)
 
+		if typOk {
+			SetReadDeadLine(conn)
+		}
 		p, err = b.Peek(payloadSize + b.Overhead())
 		if err != nil {
-			return amt, err
+			break
 		}
 
 		_, err = b.Open(p[:0], b.nonce, p, nil)
 		if err != nil {
 			log.Debug("decript payload err: %s", err.Error())
-			return amt, err
+			break
 		}
 		increment(b.nonce)
 
 		for pos := 0; pos < payloadSize; {
 			nw, err := w.Write(p[:payloadSize])
 			if err != nil {
-				return amt, err
+				log.Debugf("%s write error: %s", b.name, err.Error())
+				break
 			}
 			pos += nw
 			amt += int64(nw)
@@ -112,13 +126,24 @@ func (b *AeadDecryptor) WriteTo(w io.Writer) (amt int64, err error) {
 		b.Discard(payloadSize + b.Overhead())
 	}
 
+	b.c <- res{amt, err}
+	log.Debugf("%s done writeto", b.name)
+
+	return
 }
 
-func NewAeadDecryptor(rd io.Reader, aead cipher.AEAD) *AeadDecryptor {
+func (b *AeadDecryptor) setName(name string) {
+	b.name = name
+}
+
+func NewAeadDecryptor(rd io.Reader, aead cipher.AEAD, c chan<- res) *AeadDecryptor {
 	return &AeadDecryptor{
-		Reader: bufio.NewReaderSize(rd, 2048),
+		Reader: bufio.NewReaderSize(rd, 4096),
+		reader: rd,
 		AEAD:   aead,
 		nonce:  make([]byte, aead.NonceSize()),
+		name:   "*",
+		c:      c,
 	}
 }
 
@@ -130,9 +155,11 @@ type AeadEncryptor struct {
 	sealBuf    []byte
 	lenSec     []byte
 	payloadSec []byte
+	name       string
+	c          chan<- res
 }
 
-func NewAeadEncryptor(w io.Writer, aead cipher.AEAD) *AeadEncryptor {
+func NewAeadEncryptor(w io.Writer, aead cipher.AEAD, c chan<- res) *AeadEncryptor {
 	sealBuf := make([]byte, SS_TCP_CHUNK_LEN)
 	return &AeadEncryptor{
 		Writer:     w,
@@ -141,39 +168,55 @@ func NewAeadEncryptor(w io.Writer, aead cipher.AEAD) *AeadEncryptor {
 		sealBuf:    sealBuf,
 		lenSec:     sealBuf[:2+aead.Overhead()],
 		payloadSec: sealBuf[2+aead.Overhead():],
+		name:       "*",
+		c:          c,
 	}
 }
 
 func (b *AeadEncryptor) ReadFrom(r io.Reader) (amt int64, err error) {
 	reader := bufio.NewReader(r)
 	chunkSize := SS_TCP_CHUNK_LEN - 2*b.Overhead() - 2
+	conn, typOk := r.(net.Conn)
 	for {
+		if typOk {
+			SetReadDeadLine(conn)
+		}
+
 		n, err := reader.Read(b.payloadSec[:chunkSize])
+		if n > 0 {
+			binary.BigEndian.PutUint16(b.lenSec[:2], uint16(n))
+			b.Seal(b.lenSec[:0], b.nonce, b.lenSec[:2], nil)
+			increment(b.nonce)
+
+			b.Seal(b.payloadSec[:0], b.nonce, b.payloadSec[:n], nil)
+			increment(b.nonce)
+
+			pos, secSize := 0, 2+2*b.Overhead()+n
+			for pos < secSize {
+				nw, err := b.Write(b.sealBuf[pos:secSize])
+				if err != nil {
+					log.Debugf("%s write error: %s", b.name, err.Error())
+					return amt, err
+				}
+				pos += nw
+				amt += int64(nw)
+			}
+		}
+
 		if err != nil {
+			if netErr, ok := err.(net.Error); ok {
+				if netErr.Timeout() {
+					continue
+				}
+			}
+
+			b.c <- res{amt, err}
+			log.Debugf("%s done, %s, readfrom", b.name, err.Error())
 			return amt, err
 		}
-
-		if n == 0 {
-			continue
-		}
-
-		binary.BigEndian.PutUint16(b.lenSec[:2], uint16(n))
-		b.Seal(b.lenSec[:0], b.nonce, b.lenSec[:2], nil)
-		increment(b.nonce)
-
-		b.Seal(b.payloadSec[:0], b.nonce, b.payloadSec[:n], nil)
-		increment(b.nonce)
-
-		pos, secSize := 0, 2+2*b.Overhead()+n
-		for pos < secSize {
-			nw, err := b.Write(b.sealBuf[pos:secSize])
-			if err != nil {
-				return amt, err
-			}
-			pos += nw
-			amt += int64(nw)
-		}
 	}
+}
 
-	return
+func (b *AeadEncryptor) setName(name string) {
+	b.name = name
 }
