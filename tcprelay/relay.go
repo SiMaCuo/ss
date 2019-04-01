@@ -171,7 +171,6 @@ func (s *Server) handleConnection(client net.Conn) {
 	thisName := fmt.Sprintf("%s <-> %s", host, client.RemoteAddr().String())
 	go func() {
 		io.Copy(web, src)
-		client.Close()
 	}()
 
 	w2cRes := make(chan res, 1)
@@ -180,7 +179,6 @@ func (s *Server) handleConnection(client net.Conn) {
 	dst.setName(fmt.Sprintf("%s -> %s", host, client.RemoteAddr().String()))
 	go func() {
 		io.Copy(dst, web)
-		web.Close()
 	}()
 
 	var finalWait chan res
@@ -196,6 +194,8 @@ func (s *Server) handleConnection(client net.Conn) {
 	}
 
 	<-finalWait
+	web.(*net.TCPConn).CloseWrite()
+	client.(*net.TCPConn).CloseWrite()
 	log.Debugf("%s total done", thisName)
 }
 

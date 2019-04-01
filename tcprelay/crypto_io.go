@@ -77,21 +77,16 @@ func (b *AeadDecryptor) Read(p []byte) (n int, err error) {
 
 func (b *AeadDecryptor) WriteTo(w io.Writer) (amt int64, err error) {
 	lenSecSize := 2 + b.Overhead()
-	conn, typOk := b.reader.(net.Conn)
 	for {
-		if typOk {
-			SetReadDeadLine(conn)
-		}
-
 		p, err := b.Peek(lenSecSize)
 		if err != nil {
-			log.Debugf("%s read error: %s", b.name, err.Error())
+			log.Debugf("%s, read length section, error: %s", b.name, err.Error())
 			break
 		}
 
 		_, err = b.Open(p[:0], b.nonce, p, nil)
 		if err != nil {
-			log.Debug("decrypt length error: %s", err.Error())
+			log.Debugf("%s, decrypt length error: %s", b.name, err.Error())
 			break
 		}
 
@@ -99,17 +94,15 @@ func (b *AeadDecryptor) WriteTo(w io.Writer) (amt int64, err error) {
 		increment(b.nonce)
 		b.Discard(lenSecSize)
 
-		if typOk {
-			SetReadDeadLine(conn)
-		}
 		p, err = b.Peek(payloadSize + b.Overhead())
 		if err != nil {
+			log.Debugf("%s, read payload %d bytes, error: %s", b.name, payloadSize, err.Error())
 			break
 		}
 
 		_, err = b.Open(p[:0], b.nonce, p, nil)
 		if err != nil {
-			log.Debug("decript payload err: %s", err.Error())
+			log.Debug("%s, decript payload err: %s", b.name, err.Error())
 			break
 		}
 		increment(b.nonce)
@@ -127,7 +120,7 @@ func (b *AeadDecryptor) WriteTo(w io.Writer) (amt int64, err error) {
 	}
 
 	b.c <- res{amt, err}
-	log.Debugf("%s done writeto", b.name)
+	log.Debugf("%s, done writeto", b.name)
 
 	return
 }
