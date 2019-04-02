@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"net"
 )
 
 const SS_TCP_CHUNK_LEN = 1452
@@ -169,11 +168,11 @@ func NewAeadEncryptor(w io.Writer, aead cipher.AEAD, c chan<- res) *AeadEncrypto
 func (b *AeadEncryptor) ReadFrom(r io.Reader) (amt int64, err error) {
 	reader := bufio.NewReader(r)
 	chunkSize := SS_TCP_CHUNK_LEN - 2*b.Overhead() - 2
-	conn, typOk := r.(net.Conn)
+	// conn, typOk := r.(net.Conn)
 	for {
-		if typOk {
-			SetReadDeadLine(conn)
-		}
+		// if typOk {
+		// 	SetReadDeadLine(conn)
+		// }
 
 		n, err := reader.Read(b.payloadSec[:chunkSize])
 		if n > 0 {
@@ -197,11 +196,11 @@ func (b *AeadEncryptor) ReadFrom(r io.Reader) (amt int64, err error) {
 		}
 
 		if err != nil {
-			if netErr, ok := err.(net.Error); ok {
-				if netErr.Timeout() {
-					continue
-				}
-			}
+			// if netErr, ok := err.(net.Error); ok {
+			// 	if netErr.Timeout() {
+			// 		continue
+			// 	}
+			// }
 
 			b.c <- res{amt, err}
 			log.Debugf("%s done, %s, readfrom", b.name, err.Error())

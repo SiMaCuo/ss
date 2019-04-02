@@ -171,6 +171,7 @@ func (s *Server) handleConnection(client net.Conn) {
 	thisName := fmt.Sprintf("%s <-> %s", host, client.RemoteAddr().String())
 	go func() {
 		io.Copy(web, src)
+		client.Close()
 	}()
 
 	w2cRes := make(chan res, 1)
@@ -179,23 +180,20 @@ func (s *Server) handleConnection(client net.Conn) {
 	dst.setName(fmt.Sprintf("%s -> %s", host, client.RemoteAddr().String()))
 	go func() {
 		io.Copy(dst, web)
+		web.Close()
 	}()
 
 	var finalWait chan res
 	select {
 	// client read closed
 	case <-c2wRes:
-		web.(*net.TCPConn).CloseRead()
 		finalWait = w2cRes
 	// web read closed
 	case <-w2cRes:
-		client.(*net.TCPConn).CloseRead()
 		finalWait = c2wRes
 	}
 
 	<-finalWait
-	web.(*net.TCPConn).CloseWrite()
-	client.(*net.TCPConn).CloseWrite()
 	log.Debugf("%s total done", thisName)
 }
 
