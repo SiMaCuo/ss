@@ -116,7 +116,7 @@ func (b *AeadDecryptor) WriteTo(w io.Writer) (amt int64, err error) {
 			nw, err := w.Write(p[:payloadSize])
 			if err != nil {
 				log.Debugf("%s write error: %s", b.name, err.Error())
-				break
+				goto end
 			}
 			pos += nw
 			amt += int64(nw)
@@ -124,6 +124,7 @@ func (b *AeadDecryptor) WriteTo(w io.Writer) (amt int64, err error) {
 		b.Discard(payloadSize + b.Overhead())
 	}
 
+end:
 	b.c <- res{amt, err}
 	log.Debugf("%s, done writeto", b.name)
 
@@ -195,8 +196,7 @@ func (b *AeadEncryptor) ReadFrom(r io.Reader) (amt int64, err error) {
 			for pos < secSize {
 				nw, err := b.Write(b.sealBuf[pos:secSize])
 				if err != nil {
-					log.Debugf("%s write error: %s", b.name, err.Error())
-					return amt, err
+					break
 				}
 				pos += nw
 				amt += int64(nw)
