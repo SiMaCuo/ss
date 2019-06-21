@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"net"
+	"ss-server/shadowsock"
 )
 
 const SS_TCP_CHUNK_LEN = 1452
@@ -23,7 +25,7 @@ func increment(b []byte) {
 // WriteTo
 type AeadDecryptor struct {
 	*bufio.Reader
-	reader io.Reader
+	reader net.Conn
 	cipher.AEAD
 	nonce []byte
 	name  string
@@ -36,6 +38,7 @@ func (b *AeadDecryptor) Read(p []byte) (n int, err error) {
 	}
 
 	ltl := 2 + b.Overhead()
+	SetReadDeadLine(b.reader, 6)
 	bs, err := b.Peek(ltl)
 	if err != nil {
 		log.Debug("peek length ciphertext failed: ", err)
@@ -51,6 +54,7 @@ func (b *AeadDecryptor) Read(p []byte) (n int, err error) {
 	increment(b.nonce)
 	b.Discard(ltl)
 
+	SetReadDeadLine(b.reader, 6)
 	bs, err = b.Peek(length + b.Overhead())
 	if err != nil {
 		log.Debugf("peek size %d bytes ciphertext failed: %s", length+b.Overhead(), err.Error())
@@ -77,6 +81,7 @@ func (b *AeadDecryptor) Read(p []byte) (n int, err error) {
 func (b *AeadDecryptor) WriteTo(w io.Writer) (amt int64, err error) {
 	lenSecSize := 2 + b.Overhead()
 	for {
+		SetReadDeadLine(b.reader, 6)
 		p, err := b.Peek(lenSecSize)
 		if err != nil {
 			log.Debugf("%s, read length section, error: %s", b.name, err.Error())
@@ -93,6 +98,7 @@ func (b *AeadDecryptor) WriteTo(w io.Writer) (amt int64, err error) {
 		increment(b.nonce)
 		b.Discard(lenSecSize)
 
+		SetReadDeadLine(b.reader, 6)
 		p, err = b.Peek(payloadSize + b.Overhead())
 		if err != nil {
 			log.Debugf("%s, read payload %d bytes, error: %s", b.name, payloadSize, err.Error())
@@ -128,7 +134,7 @@ func (b *AeadDecryptor) setName(name string) {
 	b.name = name
 }
 
-func NewAeadDecryptor(rd io.Reader, aead cipher.AEAD, c chan<- res) *AeadDecryptor {
+func NewAeadDecryptor(rd net.Conn, aead cipher.AEAD, c chan<- res) *AeadDecryptor {
 	return &AeadDecryptor{
 		Reader: bufio.NewReaderSize(rd, 4096),
 		reader: rd,
@@ -143,36 +149,38 @@ func NewAeadDecryptor(rd io.Reader, aead cipher.AEAD, c chan<- res) *AeadDecrypt
 type AeadEncryptor struct {
 	io.Writer
 	cipher.AEAD
-	nonce      []byte
-	sealBuf    []byte
-	lenSec     []byte
-	payloadSec []byte
-	name       string
-	c          chan<- res
+	nonce      	[]byte
+	sealBuf    	[]byte
+	lenSec     	[]byte
+	payloadSec 	[]byte
+	name       	string
+	c          	chan<- res
+	readTimeOut	int 
 }
 
 func NewAeadEncryptor(w io.Writer, aead cipher.AEAD, c chan<- res) *AeadEncryptor {
 	sealBuf := make([]byte, SS_TCP_CHUNK_LEN)
 	return &AeadEncryptor{
-		Writer:     w,
-		AEAD:       aead,
-		nonce:      make([]byte, aead.NonceSize()),
-		sealBuf:    sealBuf,
-		lenSec:     sealBuf[:2+aead.Overhead()],
-		payloadSec: sealBuf[2+aead.Overhead():],
-		name:       "*",
-		c:          c,
+		Writer:     	w,
+		AEAD:       	aead,
+		nonce:      	make([]byte, aead.NonceSize()),
+		sealBuf:    	sealBuf,
+		lenSec:     	sealBuf[:2+aead.Overhead()],
+		payloadSec: 	sealBuf[2+aead.Overhead():],
+		name:       	"*",
+		c:          	c,
+		readTimeOut: 	0,
 	}
 }
 
 func (b *AeadEncryptor) ReadFrom(r io.Reader) (amt int64, err error) {
 	reader := bufio.NewReader(r)
 	chunkSize := SS_TCP_CHUNK_LEN - 2*b.Overhead() - 2
-	// conn, typOk := r.(net.Conn)
+	conn, typOk := r.(net.Conn)
 	for {
-		// if typOk {
-		// 	SetReadDeadLine(conn)
-		// }
+		if typOk {
+		 	SetReadDeadLine(conn, 1)
+		}
 
 		n, err := reader.Read(b.payloadSec[:chunkSize])
 		if n > 0 {
@@ -196,11 +204,19 @@ func (b *AeadEncryptor) ReadFrom(r io.Reader) (amt int64, err error) {
 		}
 
 		if err != nil {
-			// if netErr, ok := err.(net.Error); ok {
-			// 	if netErr.Timeout() {
-			// 		continue
-			// 	}
-			// }
+			if netErr, ok := err.(net.Error); ok {
+				if netErr.Timeout() {
+					if n > 0 {
+						b.readTimeOut = 0
+						continue
+					}
+					
+					b.readTimeOut++
+					if shadowsock.SsConfig.ReadTimeout * b.readTimeOut < 120 {
+						continue
+					}
+				}
+			}
 
 			b.c <- res{amt, err}
 			log.Debugf("%s done, %s, readfrom", b.name, err.Error())

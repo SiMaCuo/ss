@@ -199,8 +199,8 @@ func (s *Server) handleConnection(client net.Conn) {
 
 func Stat(c2w, w2c int64) {}
 
-func SetReadDeadLine(c net.Conn) {
-	c.SetReadDeadline(time.Now().Add(time.Duration(shadowsock.SsConfig.ReadTimeout) * time.Second))
+func SetReadDeadLine(c net.Conn, scale int) {
+	c.SetReadDeadline(time.Now().Add(time.Duration(shadowsock.SsConfig.ReadTimeout * scale) * time.Second))
 }
 
 func parseRequest(buf []byte) (host string, err error) {
