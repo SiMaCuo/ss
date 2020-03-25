@@ -182,7 +182,7 @@ func (b *AeadEncryptor) ReadFrom(r io.Reader) (amt int64, err error) {
 
 			secSize := 2 + 2*b.Overhead() + n
 			_, err = b.Write(b.sealBuf[:secSize])
-			if err != nil {
+			if err == nil {
 				amt += int64(secSize)
 			}
 		}
