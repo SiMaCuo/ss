@@ -88,7 +88,7 @@ type res struct {
 	err error
 }
 
-func (s *Server) handShake(c net.Conn, resChan chan<- res) (net.Conn, *AeadDecryptor, string, error) {
+func (s *Server) handShake(c net.Conn) (net.Conn, *AeadDecryptor, string, error) {
 	salt, saltSize := make([]byte, s.cipher.SaltSize()), s.cipher.SaltSize()
 	n, err := c.Read(salt)
 	if err != nil {
@@ -110,7 +110,7 @@ func (s *Server) handShake(c net.Conn, resChan chan<- res) (net.Conn, *AeadDecry
 		return nil, nil, "", msg
 	}
 
-	decr := NewAeadDecryptor(c, aead, resChan)
+	decr := NewAeadDecryptor(c, aead)
 	n, err = decr.Read(buf)
 	if err != nil {
 		msg := fmt.Errorf("decrypt handshake message failed")
@@ -153,47 +153,33 @@ func (s *Server) genSaltAndSend(c net.Conn) ([]byte, error) {
 }
 
 func (s *Server) handleConnection(client net.Conn) {
+	defer client.Close()
 	salt, err := s.genSaltAndSend(client)
 	if err != nil {
 		log.Debug("gen salt failed: ", err)
-		client.Close()
 		return
 	}
 
-	c2wRes := make(chan res, 1)
-	web, src, host, err := s.handShake(client, c2wRes)
+	web, src, host, err := s.handShake(client)
 	if err != nil {
 		log.Debug("handshake failed: ", err)
-		client.Close()
 		return
 	}
 
 	thisName := fmt.Sprintf("%s <-> %s", host, client.RemoteAddr().String())
-	go func() {
+	done := make(chan struct{})
+	go func(done chan struct{}) {
 		io.Copy(web, src)
-		client.Close()
-	}()
-
-	w2cRes := make(chan res, 1)
-	aead, _ := s.cipher.Encryptor(salt)
-	dst := NewAeadEncryptor(client, aead, w2cRes)
-	dst.setName(fmt.Sprintf("%s -> %s", host, client.RemoteAddr().String()))
-	go func() {
-		io.Copy(dst, web)
 		web.Close()
-	}()
+		close(done)
+	}(done)
 
-	var finalWait chan res
-	select {
-	// client read closed
-	case <-c2wRes:
-		finalWait = w2cRes
-	// web read closed
-	case <-w2cRes:
-		finalWait = c2wRes
-	}
+	aead, _ := s.cipher.Encryptor(salt)
+	dst := NewAeadEncryptor(client, aead)
+	dst.setName(fmt.Sprintf("%s -> %s", host, client.RemoteAddr().String()))
+	io.Copy(dst, web)
 
-	<-finalWait
+	<-done
 	log.Debugf("%s total done", thisName)
 }
 
