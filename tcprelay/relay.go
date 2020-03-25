@@ -83,11 +83,6 @@ func (s *Server) Run() {
 
 var zeroNonce = make([]byte, 64)
 
-type res struct {
-	amt int64
-	err error
-}
-
 func (s *Server) handShake(c net.Conn) (net.Conn, *AeadDecryptor, string, error) {
 	salt, saltSize := make([]byte, s.cipher.SaltSize()), s.cipher.SaltSize()
 	n, err := c.Read(salt)
